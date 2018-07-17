@@ -1,4 +1,4 @@
-﻿#include "ofApp.h"
+#include "ofApp.h"
 
 #ifdef _MSC_VER
 #ifdef _DEBUG
@@ -29,11 +29,12 @@ void imgui_draw_tree_node(const char *name, bool isOpen, T f) {
     }
 }
 
-inline void images_to_gv(std::string output_path, std::vector<std::string> imagePaths, float fps, std::atomic<int> &done_frames, std::atomic<bool> &interrupt, bool liteMode, bool hasAlpha) {
+inline void images_to_gv(std::string output_path, std::vector<std::string> imagePaths, float fps, std::atomic<int> &done_frames, std::atomic<float> &elapsed_time, std::atomic<bool> &interrupt, bool liteMode, bool hasAlpha) {
     if(imagePaths.empty()) {
         return;
     }
-    
+	auto start = std::chrono::system_clock::now();
+	
     // memory
     uint32_t _width = 0;
     uint32_t _height = 0;
@@ -100,13 +101,15 @@ inline void images_to_gv(std::string output_path, std::vector<std::string> image
             _gpuCompressBuffer.resize(workCount * _bufferSize);
             _lz4CompressBuffer.resize(workCount * compressBound);
             
-            tbb::parallel_for(tbb::blocked_range<int>( 0, workCount, 1 ), [compress, _index, _bufferSize, compressBound, &lz4sizes, &_gpuCompressBuffer, &_lz4CompressBuffer, &done_frames](const tbb::blocked_range< int >& range) {
+            tbb::parallel_for(tbb::blocked_range<int>( 0, workCount, 1 ), [compress, _index, _bufferSize, compressBound, &lz4sizes, &_gpuCompressBuffer, &_lz4CompressBuffer, &done_frames, &elapsed_time, start](const tbb::blocked_range< int >& range) {
                 for (int i = range.begin(); i != range.end(); i++) {
                     compress(_index + i, _gpuCompressBuffer.data() + i * _bufferSize);
                     lz4sizes[i] = LZ4_compress_HC((char *)_gpuCompressBuffer.data() + i * _bufferSize,
                                                   (char *)_lz4CompressBuffer.data() + i * compressBound,
                                                   _bufferSize, compressBound, LZ4HC_CLEVEL_DEFAULT);
                     done_frames++;
+					auto end = std::chrono::system_clock::now();
+					elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count()/1000.f;
                 }
             });
             
@@ -146,7 +149,11 @@ inline void images_to_gv(std::string output_path, std::vector<std::string> image
             // 終了
             break;
         }
+		auto end = std::chrono::system_clock::now();
+		elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count()/1000.f;
     }
+	auto end = std::chrono::system_clock::now();
+	elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count()/1000.f;
 }
 
 template<typename R>
@@ -196,7 +203,8 @@ void ofApp::startCompression() {
 		std::sort(task->image_paths.begin(), task->image_paths.end());
 
         task->output_path = input + ".gv";
-        task->done_frames = 0;
+		task->done_frames = 0;
+		task->elapsed_time = 0;
         
         if(task->output_path.empty() == false) {
             _tasks.push_back(task);
@@ -231,12 +239,13 @@ void ofApp::draw() {
                 auto output_path = task->output_path;
                 auto image_paths = task->image_paths;
                 auto fps = _fps;
-                std::atomic<int> &done_frames = task->done_frames;
+				std::atomic<int> &done_frames = task->done_frames;
+				std::atomic<float> &elapsed_time = task->elapsed_time;
                 std::atomic<bool> &abortTask = _abortTask;
                 auto liteMode = _liteMode;
                 auto hasAlpha = _hasAlpha;
-                task->work = std::async([output_path, image_paths, fps, &done_frames, &abortTask, liteMode, hasAlpha](){
-                    images_to_gv(output_path, image_paths, fps, done_frames, abortTask, liteMode, hasAlpha);
+                task->work = std::async([output_path, image_paths, fps, &done_frames, &elapsed_time, &abortTask, liteMode, hasAlpha](){
+                    images_to_gv(output_path, image_paths, fps, done_frames, elapsed_time, abortTask, liteMode, hasAlpha);
                     return 0;
                 });
                 all_done = false;
@@ -245,7 +254,11 @@ void ofApp::draw() {
         }
         
         if(all_done) {
-            _dones = _inputs;
+			for(auto t : _tasks) {
+				if(t->done) {
+					_dones.push_back(make_pair(t->output_path, t->elapsed_time.load()));
+				}
+			}
             _inputs.clear();
             _tasks.clear();
             _isConverting = false;
@@ -268,7 +281,7 @@ void ofApp::draw() {
         });
         imgui_draw_tree_node("Dones", true, [=]() {
             for(int i = 0 ; i < _dones.size() ; ++i) {
-                ImGui::Text("[%d]: %s", i, _dones[i].c_str());
+                ImGui::Text("[%d]: %s", i, _dones[i].first.c_str());
             }
         });
         if(_inputs.empty() == false) {
@@ -299,7 +312,18 @@ void ofApp::draw() {
         imgui_draw_tree_node("Progress", true, [=]() {
             for(int i = 0 ; i < _tasks.size() ; ++i) {
                 std::shared_ptr<ConvTask> task = _tasks[i];
-                ImGui::Text("[%d]: %s (%d / %d)", i, task->output_path.c_str(), (int)task->done_frames.load(), (int)task->image_paths.size());
+				int done_images = (int)task->done_frames.load();
+				int num_images = (int)task->image_paths.size();
+				float timef = (float)task->elapsed_time.load();
+				ImGui::Text("[%d]: %s (%d / %d)", i, task->output_path.c_str(), done_images, num_images);
+				if(timef > 0) {
+					float fps = done_images/timef;
+					if(fps > 0) {
+						ImGui::Indent();
+						ImGui::Text("elapsed: %.2fsec fps: %.2f estimated: %.2fsec", timef, fps, (num_images-done_images)/fps);
+						ImGui::Unindent();
+					}
+				}
             }
         });
     }
@@ -362,25 +386,25 @@ void ofApp::gotMessage(ofMessage msg){
 
 //--------------------------------------------------------------
 void ofApp::dragEvent(ofDragInfo dragInfo) {
-    // Only Dirs
-    for(auto input : dragInfo.files) {
-        ofDirectory dir(input);
-        if(dir.isDirectory()) {
-            _inputs.push_back(input);
-        }
-    }
-    
-    // dup check
-    std::vector<std::string> unique_inputs;
-    std::set<std::string> unique_set;
-    for(auto input : _inputs) {
-        if(unique_set.count(input) == 0) {
-            unique_inputs.push_back(input);
-            unique_set.insert(input);
-        } else {
-            // skip
-        }
-    }
-    
-    std::swap(_inputs, unique_inputs);
+	// Only Dirs
+	for(auto input : dragInfo.files) {
+		ofDirectory dir(input);
+		if(dir.isDirectory()) {
+			_inputs.push_back(input);
+		}
+	}
+	
+	// dup check
+	std::vector<std::string> unique_inputs;
+	std::set<std::string> unique_set;
+	for(auto input : _inputs) {
+		if(unique_set.count(input) == 0) {
+			unique_inputs.push_back(input);
+			unique_set.insert(input);
+		} else {
+			// skip
+		}
+	}
+	
+	std::swap(_inputs, unique_inputs);
 }

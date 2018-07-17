@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "ofMain.h"
 
@@ -44,8 +44,8 @@ public:
     bool _liteMode = true;
     bool _hasAlpha = false;
     float _fps = 30.0f;
-    std::vector<std::string> _inputs;
-    std::vector<std::string> _dones;
+	std::vector<std::string> _inputs;
+	std::vector<std::pair<std::string, float>> _dones;
     
     // タスク
     struct ConvTask {
@@ -54,7 +54,8 @@ public:
         
         std::string output_path;
         std::vector<std::string> image_paths;
-        std::atomic<int> done_frames;
+		std::atomic<int> done_frames;
+		std::atomic<float> elapsed_time;
         std::future<int> work;
     };
     std::vector<std::shared_ptr<ConvTask>> _tasks;
