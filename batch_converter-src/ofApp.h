@@ -43,7 +43,10 @@ public:
     
     bool _liteMode = true;
     bool _hasAlpha = false;
-    float _fps = 30.0f;
+	bool _isEstimateAlphaZeroColor = false;
+	bool _resize = false;
+	int _resize_size[2] = {0};
+	float _fps = 30.0f;
 	std::vector<std::string> _inputs;
 	std::vector<std::pair<std::string, float>> _dones;
     
