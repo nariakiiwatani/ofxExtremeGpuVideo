@@ -189,6 +189,10 @@ inline void images_to_gv(std::string output_path, std::vector<std::string> image
 					img.resize(_width, _height);
 				}
                 img.setImageType(OF_IMAGE_COLOR_ALPHA);
+
+				if (isEstimateAlphaZeroColor) {
+					img = estimateAlphaZeroColor(img);
+				}
                 
                 squish::CompressImage(img.getData(), _width, _height, dst, _squishFlag);
             };

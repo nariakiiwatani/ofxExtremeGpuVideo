@@ -49,7 +49,6 @@ public:
 	float _fps = 30.0f;
 	std::vector<std::string> _inputs;
 	std::vector<std::pair<std::string, float>> _dones;
-    
     // タスク
     struct ConvTask {
         bool run = false;
