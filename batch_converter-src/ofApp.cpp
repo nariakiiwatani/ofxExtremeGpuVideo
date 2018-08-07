@@ -18,6 +18,20 @@
 #include "lz4frame.h"
 #include "lz4hc.h"
 
+namespace {
+	GLuint fixFormat(GLuint fmt) {
+		switch(fmt) {
+			case GL_RGBA8:
+			case GL_RGBA:
+				return GL_RGBA;
+			case GL_RGB8:
+			case GL_RGB:
+				return GL_RGB;
+		}
+		return GL_RGBA;
+	}
+}
+
 inline ofPixels estimateAlphaZeroColor(const ofPixels &pixels) {
 	if (pixels.getImageType() != OF_IMAGE_COLOR_ALPHA) {
 		return pixels;
@@ -124,7 +138,7 @@ void imgui_draw_tree_node(const char *name, bool isOpen, T f) {
     }
 }
 
-inline void images_to_gv(std::string output_path, std::vector<std::string> imagePaths, float fps, std::atomic<int> &done_frames, std::atomic<float> &elapsed_time, std::atomic<bool> &interrupt, bool liteMode, bool hasAlpha, bool isEstimateAlphaZeroColor, bool resize, int resize_width, int resize_height) {
+inline void images_to_gv(std::string output_path, std::vector<std::string> imagePaths, float fps, std::atomic<int> &done_frames, std::atomic<float> &elapsed_time, std::atomic<bool> &interrupt, bool _compress, bool liteMode, bool hasAlpha, bool isEstimateAlphaZeroColor, bool resize, int resize_width, int resize_height) {
     if(imagePaths.empty()) {
         return;
     }
@@ -154,11 +168,15 @@ inline void images_to_gv(std::string output_path, std::vector<std::string> image
     _width = width;
     _height = height;
     
-    uint32_t flagQuality = liteMode ? (squish::kColourRangeFit | squish::kColourMetricUniform) : squish::kColourIterativeClusterFit;
-    
-    _squishFlag = flagQuality | (hasAlpha ? squish::kDxt5 : squish::kDxt1);
-    _bufferSize = squish::GetStorageRequirements(_width, _height, _squishFlag);
-    
+	if(_compress) {
+		uint32_t flagQuality = liteMode ? (squish::kColourRangeFit | squish::kColourMetricUniform) : squish::kColourIterativeClusterFit;
+		
+		_squishFlag = flagQuality | (hasAlpha ? squish::kDxt5 : squish::kDxt3);
+		_bufferSize = squish::GetStorageRequirements(_width, _height, _squishFlag);
+	}
+	else {
+		_bufferSize = _width*_height*img.getNumChannels();
+	}
     // 書き出し開始
     _io = std::unique_ptr<GpuVideoIO>(new GpuVideoIO(output_path.c_str(), "wb"));
     
@@ -170,14 +188,20 @@ inline void images_to_gv(std::string output_path, std::vector<std::string> image
     uint32_t frameCount = (uint32_t)imagePaths.size();
     W(frameCount);
     W(_fps);
-    uint32_t videoFmt = hasAlpha ? GPU_COMPRESS_DXT5 : GPU_COMPRESS_DXT1;
+	uint32_t videoFmt;
+	if(_compress) {
+		videoFmt = hasAlpha ? GPU_COMPRESS_DXT5 : GPU_COMPRESS_DXT3;
+	}
+	else {
+		videoFmt = fixFormat(ofGetGLInternalFormatFromPixelFormat(img.getPixelFormat())) | GPU_UNCOMPRESS_FLAG;
+	}
     W(videoFmt);
     W(_bufferSize);
 #undef W
     
     for(;;) {
         if(_index < imagePaths.size()) {
-            auto compress = [imagePaths, _width, _height, _squishFlag, isEstimateAlphaZeroColor](int index, uint8_t *dst) {
+            auto compress = [imagePaths, _width, _height, _compress, _bufferSize, _squishFlag, isEstimateAlphaZeroColor](int index, uint8_t *dst) {
                 std::string src = imagePaths[index];
                 
                 ofPixels img;
@@ -188,13 +212,20 @@ inline void images_to_gv(std::string output_path, std::vector<std::string> image
 				if(img.getWidth() != _width || img.getHeight() != _height) {
 					img.resize(_width, _height);
 				}
-                img.setImageType(OF_IMAGE_COLOR_ALPHA);
+				if(_compress) {
+                	img.setImageType(OF_IMAGE_COLOR_ALPHA);
+				}
 
 				if (isEstimateAlphaZeroColor) {
 					img = estimateAlphaZeroColor(img);
 				}
                 
-                squish::CompressImage(img.getData(), _width, _height, dst, _squishFlag);
+				if(_compress) {
+                	squish::CompressImage(img.getData(), _width, _height, dst, _squishFlag);
+				}
+				else {
+					memcpy(dst, img.getData(), _bufferSize);
+				}
             };
             
             const int kBatchCount = 32;
@@ -347,14 +378,15 @@ void ofApp::draw() {
 				std::atomic<int> &done_frames = task->done_frames;
 				std::atomic<float> &elapsed_time = task->elapsed_time;
                 std::atomic<bool> &abortTask = _abortTask;
-                auto liteMode = _liteMode;
+				auto compress = _compress;
+				auto liteMode = _liteMode;
 				auto hasAlpha = _hasAlpha;
 				auto isEstimate = _isEstimateAlphaZeroColor;
 				auto resize = _resize;
 				auto resize_width = _resize_size[0];
 				auto resize_height = _resize_size[1];
-                task->work = std::async([output_path, image_paths, fps, &done_frames, &elapsed_time, &abortTask, liteMode, hasAlpha, isEstimate, resize, resize_width, resize_height](){
-                    images_to_gv(output_path, image_paths, fps, done_frames, elapsed_time, abortTask, liteMode, hasAlpha, isEstimate, resize, resize_width, resize_height);
+                task->work = std::async([output_path, image_paths, fps, &done_frames, &elapsed_time, &abortTask, compress, liteMode, hasAlpha, isEstimate, resize, resize_width, resize_height](){
+                    images_to_gv(output_path, image_paths, fps, done_frames, elapsed_time, abortTask, compress, liteMode, hasAlpha, isEstimate, resize, resize_width, resize_height);
                     return 0;
                 });
                 all_done = false;
@@ -400,8 +432,11 @@ void ofApp::draw() {
         }
 
         imgui_draw_tree_node("Option", true, [=]() {
-            ImGui::Checkbox("Lite Mode", &_liteMode);
-			ImGui::Checkbox("Has Alpha", &_hasAlpha);
+			ImGui::Checkbox("compress", &_compress);
+			if(_compress) {
+				ImGui::Checkbox("Lite Mode", &_liteMode);
+				ImGui::Checkbox("Has Alpha", &_hasAlpha);
+			}
 			ImGui::Checkbox("Resize", &_resize);
 			if(_resize) {
 				ImGui::SameLine(); ImGui::InputInt2("", &_resize_size[0]);
@@ -422,8 +457,11 @@ void ofApp::draw() {
         //
     } else {
         imgui_draw_tree_node("Option", true, [=]() {
-            ImGui::Text("Lite Mode: %s", _liteMode ? "YES" : "NO");
-			ImGui::Text("Has Alpha: %s", _hasAlpha  ? "YES" : "NO");
+			ImGui::Text("Compress: %s", _compress ? "YES" : "NO");
+			if(_compress) {
+				ImGui::Text("Lite Mode: %s", _liteMode ? "YES" : "NO");
+				ImGui::Text("Has Alpha: %s", _hasAlpha  ? "YES" : "NO");
+			}
 			ImGui::Text("Resize: %s", _resize  ? "YES" : "NO");
 			if(_resize) {
 				ImGui::SameLine();

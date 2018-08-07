@@ -24,16 +24,24 @@ GpuVideoStreamingTexture::GpuVideoStreamingTexture(std::shared_ptr<IGpuVideoRead
             case GPU_COMPRESS_DXT3:
                 _glFmt = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT;
                 break;
-            case GPU_COMPRESS_DXT5:
-                _glFmt = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
-                break;
+			case GPU_COMPRESS_DXT5:
+				_glFmt = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
+				break;
+			default:
+				_glFmt = _reader->getFormat() ^ GPU_UNCOMPRESS_FLAG;
+				break;
 #ifndef __APPLE__
 			case GPU_COMPRESS_BC7:
 				_glFmt = GL_COMPRESSED_RGBA_BPTC_UNORM_ARB;
 				break;
 #endif
         }
-        glCompressedTexImage2D(GL_TEXTURE_2D, 0, _glFmt, _reader->getWidth(), _reader->getHeight(), 0, _reader->getFrameBytes(), nullptr);
+		if(isCompressedFormat(_glFmt)) {
+        	glCompressedTexImage2D(GL_TEXTURE_2D, 0, _glFmt, _reader->getWidth(), _reader->getHeight(), 0, _reader->getFrameBytes(), nullptr);
+		}
+		else {
+			glTexImage2D(GL_TEXTURE_2D, 0, _glFmt, _reader->getWidth(), _reader->getHeight(), 0, _glFmt, GL_UNSIGNED_BYTE, nullptr);
+		}
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
@@ -59,7 +67,12 @@ void GpuVideoStreamingTexture::uploadGPU() {
     std::swap(_textures[0], _textures[1]);
     glBindTexture(GL_TEXTURE_2D, _textures[0]);
     
-    glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0 /* xoffset */, 0 /* yoffset */, _reader->getWidth(), _reader->getHeight(), _glFmt, _reader->getFrameBytes(), _textureMemory.data());
+	if(isCompressedFormat(_glFmt)) {
+		glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0 /* xoffset */, 0 /* yoffset */, _reader->getWidth(), _reader->getHeight(), _glFmt, _reader->getFrameBytes(), _textureMemory.data());
+	}
+	else {
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _reader->getWidth(), _reader->getHeight(), _glFmt, GL_UNSIGNED_BYTE, _textureMemory.data());
+	}
     glBindTexture(GL_TEXTURE_2D, 0);
     
     _textureNeedsUpload = false;

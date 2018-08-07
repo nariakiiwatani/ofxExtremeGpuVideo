@@ -13,6 +13,14 @@
 #include <OpenGL/gl.h>
 #endif
 
+#include "GpuVideo.hpp"
+
+namespace {
+	bool isCompressedFormat(GLuint fmt) {
+		return (fmt&GPU_UNCOMPRESS_FLAG)!=0;
+	}
+}
+
 class IGpuVideoTexture {
 public:
     virtual ~IGpuVideoTexture() {}

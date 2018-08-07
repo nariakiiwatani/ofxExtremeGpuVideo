@@ -24,6 +24,9 @@ GpuVideoOnGpuMemoryTexture::GpuVideoOnGpuMemoryTexture(std::shared_ptr<IGpuVideo
         case GPU_COMPRESS_DXT5:
             glFmt = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
             break;
+		default:
+			glFmt = reader->getFormat() ^ GPU_UNCOMPRESS_FLAG;
+			break;
 #ifndef __APPLE__
 		case GPU_COMPRESS_BC7:
 			glFmt = GL_COMPRESSED_RGBA_BPTC_UNORM_ARB;
@@ -41,7 +44,12 @@ GpuVideoOnGpuMemoryTexture::GpuVideoOnGpuMemoryTexture(std::shared_ptr<IGpuVideo
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
 
         reader->read(memory.data(), i);
-        glCompressedTexImage2D(GL_TEXTURE_2D, 0, glFmt, reader->getWidth(), reader->getHeight(), 0, memory.size(), memory.data());
+		if(isCompressedFormat(glFmt)) {
+			glCompressedTexImage2D(GL_TEXTURE_2D, 0, glFmt, reader->getWidth(), reader->getHeight(), 0, memory.size(), memory.data());
+		}
+		else {
+			glTexImage2D(GL_TEXTURE_2D, 0, glFmt, reader->getWidth(), reader->getHeight(), 0, GL_RGBA, GL_UNSIGNED_BYTE, memory.data());
+		}
     }
     glBindTexture(GL_TEXTURE_2D, 0);
 }

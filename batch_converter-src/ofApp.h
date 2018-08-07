@@ -41,6 +41,7 @@ public:
     
     bool _isConverting = false;
     
+	bool _compress = true;
     bool _liteMode = true;
     bool _hasAlpha = false;
 	bool _isEstimateAlphaZeroColor = false;
